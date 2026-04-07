@@ -3,6 +3,8 @@ import re
 import json
 import math
 import torch
+import numpy as np
+from tqdm import tqdm
 import torch.nn as nn
 import torch.nn.functional as F
 from collections import defaultdict
@@ -230,6 +232,93 @@ def evaluate_model_test(model, dataloader, device, pred_pos="last_token", pad_id
     return accuracy_per_type
 
 
+def evaluate_model_test_adaptive_metrics(
+        model,
+        dataloader,
+        device,
+        max_recurrence,
+        pred_pos="last_token",
+        eps_kl=0.001,
+        entropy_thresh=3.00,
+        min_iters=1,
+):
+    model.eval()
+    old_num_iterations = getattr(model, "num_iterations", None)
+    model.num_iterations = max_recurrence
+
+    correct_per_type = defaultdict(int)
+    total_per_type = defaultdict(int)
+    iterations_per_type = defaultdict(list)
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Evaluating with Adaptive Recurrence (KL + Entropy)"):
+            if len(batch) == 6:
+                input_ids, target_tokens, attention_mask, input_lengths, test_types, _ = batch
+            else:
+                input_ids, target_tokens, attention_mask, input_lengths, test_types = batch
+
+            input_ids = input_ids.to(device)
+            target_tokens = target_tokens.to(device)
+            attention_mask = attention_mask.to(device)
+
+            outputs = model.forward_adapative(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                input_lengths=input_lengths,
+                pred_pos=pred_pos,
+                eps_kl=eps_kl,
+                entropy_thresh=entropy_thresh,
+                min_iters=min_iters,
+            )
+
+            final_logits = outputs["final_logits"]
+            iterations_used = outputs["iterations_used"]
+
+            if pred_pos == "inp_len":
+                input_lengths_dev = torch.as_tensor(input_lengths, device=device, dtype=torch.long)
+                current_predict_pos = (input_lengths_dev - 1).clamp(min=0, max=final_logits.size(1) - 1)
+                pred_ids = final_logits[
+                           torch.arange(final_logits.size(0), device=device), current_predict_pos, :
+                           ].argmax(dim=-1)
+            else:
+                pred_ids = final_logits[:, -1, :].argmax(dim=-1)
+
+            for i in range(input_ids.size(0)):
+                tt = test_types[i]
+                tgt_id = target_tokens[i].item()
+
+                iterations_per_type[tt].append(int(iterations_used[i].item()))
+                correct_per_type[tt] += int(pred_ids[i].item() == tgt_id)
+                total_per_type[tt] += 1
+
+    if old_num_iterations is not None:
+        model.num_iterations = old_num_iterations
+
+    accuracy_per_type = {
+        tt: (correct_per_type[tt] / total_per_type[tt]) * 100.0
+        for tt in total_per_type if total_per_type[tt] > 0
+    }
+
+    avg_iterations_per_type = {
+        tt: float(np.mean(v)) for tt, v in iterations_per_type.items()
+    }
+
+    iterations_stats_per_type = {}
+    for tt, lst in iterations_per_type.items():
+        arr = np.array(lst, dtype=np.float32)
+        iterations_stats_per_type[tt] = {
+            "count": int(arr.size),
+            "mean": float(arr.mean()) if arr.size else float("nan"),
+            "median": float(np.median(arr)) if arr.size else float("nan"),
+            "std": float(arr.std(ddof=0)) if arr.size else float("nan"),
+            "min": float(arr.min()) if arr.size else float("nan"),
+            "max": float(arr.max()) if arr.size else float("nan"),
+            "values": lst,
+        }
+
+    return accuracy_per_type, avg_iterations_per_type, iterations_stats_per_type
+
+
 class RecurrentGPT2Block(nn.Module):
     def __init__(self, config, num_iterations, positional_embedding_type='learned', input_injection=False,
                  c_scale=0.003):
@@ -410,4 +499,104 @@ class RecurrentGPT2Block(nn.Module):
             "iteration_counts": iteration_counts,
             "iterations_used": iterations_used,
             "halt_driver": halt_driver.detach().cpu()
+        }
+
+    def forward_adapative(
+            self,
+            input_ids,
+            attention_mask,
+            input_lengths,
+            pred_pos="last_token",
+            eps_kl=0.01,
+            entropy_thresh=3.00,
+            min_iters=1,
+    ):
+        batch_size, seq_len = input_ids.size()
+        device = input_ids.device
+
+        token_embeds = self.token_embedding(input_ids)
+
+        if self.positional_embedding_type == 'learned':
+            position_ids = torch.arange(0, seq_len, dtype=torch.long, device=device).unsqueeze(0)
+            pos_embeds = self.position_embedding(position_ids)
+            hidden_states = token_embeds + pos_embeds
+        elif self.positional_embedding_type == 'sinusoidal':
+            pos_embeds = self.pe[:seq_len, :].unsqueeze(0)
+            hidden_states = token_embeds + pos_embeds
+        else:
+            hidden_states = token_embeds
+
+        hidden_states = self.dropout(hidden_states)
+        initial_embeddings = hidden_states
+
+        if attention_mask is not None:
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2).to(hidden_states.dtype)
+            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        else:
+            extended_attention_mask = None
+
+        input_lengths = torch.as_tensor(input_lengths, device=device, dtype=torch.long)
+
+        if pred_pos == "inp_len":
+            monitor_pos = (input_lengths - 1).clamp(min=0, max=seq_len - 1)
+        else:
+            monitor_pos = torch.full((batch_size,), seq_len - 1, dtype=torch.long, device=device)
+
+        halted = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        iteration_counts = torch.full((batch_size,), self.num_iterations - 1, dtype=torch.long, device=device)
+
+        chosen_logits = None
+        final_logits = None
+        logp_prev = None
+
+        for t in range(self.num_iterations):
+            if self.input_injection and t > 0:
+                hidden_states = hidden_states + initial_embeddings
+
+            for block in self.blocks:
+                hidden_states = block(hidden_states, attention_mask=extended_attention_mask)[0]
+
+            all_logits_t = self.lm_head(self.ln_f(hidden_states))
+            final_logits = all_logits_t
+
+            logits_at_pos = all_logits_t[
+                            torch.arange(batch_size, device=device), monitor_pos, :
+                            ]
+            logp_t = F.log_softmax(logits_at_pos, dim=-1)
+
+            if t > 0:
+                p_t = logp_t.exp()
+                kl = torch.sum(p_t * (logp_t - logp_prev), dim=-1)
+                entropy = -torch.sum(p_t * logp_t, dim=-1)
+
+                new_halts = (
+                        (~halted)
+                        & ((t + 1) >= min_iters)
+                        & (kl < eps_kl)
+                        & (entropy < entropy_thresh)
+                )
+
+                if new_halts.any():
+                    if chosen_logits is None:
+                        chosen_logits = torch.empty_like(all_logits_t)
+                    chosen_logits[new_halts] = all_logits_t[new_halts]
+                    iteration_counts[new_halts] = t
+                    halted |= new_halts
+
+                if halted.all():
+                    break
+
+            logp_prev = logp_t
+
+        if chosen_logits is None:
+            chosen_logits = final_logits
+        else:
+            not_halted = ~halted
+            if not_halted.any():
+                chosen_logits[not_halted] = final_logits[not_halted]
+
+        return {
+            "final_logits": chosen_logits,
+            "iteration_counts": iteration_counts,
+            "iterations_used": iteration_counts + 1,
         }
