@@ -42,7 +42,25 @@ Within each systematicity directory, checkpoint files are named `checkpoint_epoc
 
 `python inference_extrapolation_adaptive.py`
 
-### Citation
+## Optional Data Generation
+
+### Depth Extrapolation
+
+Set the required parameters such as NUM_ENTITY_IN, NUM_RELATION, max_hop, and a temporary data_dir and then run - 
+
+`python getNhopfact.py`
+
+Next, set the temporary data_dir from the previous run as the base_path, and a new output_dir and then run - 
+
+`python create_dataset.py`
+
+This should create a new dataset with the defined characteristics (entities, relations etc.) in the output_dir
+
+### Systematicity
+
+For systematicity experiments using 2-hop composition, we use the data generation pipeline from the [GrokkedTransformers](https://github.com/OSU-NLP-Group/GrokkedTransformer) repository. In all our experiments, the inferred/atomic ratio is 7.2 with 2000 entities and 200 relations. Please look in the GrokkedTransformers repo for more details on how to re-generate data.
+
+## Citation
 ```
 TBD
 ```
