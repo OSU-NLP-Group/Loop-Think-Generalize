@@ -60,6 +60,12 @@ This should create a new dataset with the defined characteristics (entities, rel
 
 For systematicity experiments using 2-hop composition, we use the data generation pipeline from the [GrokkedTransformers](https://github.com/OSU-NLP-Group/GrokkedTransformer) repository. In all our experiments, the inferred/atomic ratio is 7.2 with 2000 entities and 200 relations. Please look in the GrokkedTransformers repo for more details on how to re-generate data.
 
+## Logit Margin Analysis
+
+To reproduce Figure 8 from the paper set the required parameters in model_specs and other necessary paths and run - 
+
+`python logit_margin_analysis.py`
+
 ## Citation
 ```
 TBD
