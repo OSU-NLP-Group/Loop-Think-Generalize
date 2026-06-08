@@ -197,13 +197,8 @@ def train_model(model, dataloader, test_dataloader, args, test_type, start_epoch
         avg_loss = total_loss / len(dataloader)
 
         if args.recurrence_type == 'dynamic':
-            test_acc_per_type = evaluate_model_test_adaptive(
-                model,
-                test_dataloader,
-                args.device,
-                pred_pos=args.pred_pos,
-                max_recurrence=args.dynamic_max
-            )
+            model.num_iterations = args.dynamic_max
+            test_acc_per_type = evaluate_model_test(model, test_dataloader, args.device, pred_pos=args.pred_pos)
             test_acc_overall = sum(test_acc_per_type.values()) / len(test_acc_per_type) if test_acc_per_type else 0.0
         else:
             model.num_iterations = args.recurrence
@@ -389,7 +384,8 @@ if __name__ == '__main__':
     else:
         current_epoch = 0
 
-    # model = torch.compile(model, mode="max-autotune")
+    if args.train_mode != 'regular':
+        model = torch.compile(model, mode=args.train_mode)
 
     # current_epoch = 0
     all_valid_test = []
