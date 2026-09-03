@@ -1,4 +1,4 @@
-# Loop-Think-Generalize
+# [COLM '26] Loop, Think, & Generalize: Implicit Reasoning in Recurrent-Depth Transformers (https://arxiv.org/abs/2604.07822)
 
 >We study implicit reasoning, i.e. the ability to combine knowledge or rules within a single forward pass. While transformer-based large language models store substantial factual knowledge and rules, they often fail to compose this knowledge for implicit multi-hop reasoning, suggesting a lack of compositional generalization over their parametric knowledge. To address this limitation, we study recurrent-depth transformers, which enables iterative computation over the same transformer layers. We investigate two compositional generalization challenges under the implicit reasoning scenario: systematic generalization, i.e. combining knowledge that is never used for compositions during training, and recursion extrapolation, i.e. generalizing from limited reasoning depth (e.g. training on up to 5-hop) to deeper compositions (e.g. 10-hop). Through controlled studies with models trained from scratch, we show that while vanilla transformers struggle with both generalization challenges, recurrent-depth transformers can effectively make such generalization. For systematic generalization, we find that this ability emerges through a three-stage grokking process, transitioning from memorization to in-distribution generalization and finally to systematic generalization, supported by mechanistic analysis. For recursion extrapolation, we show that generalization beyond training depth can be unlocked by scaling inference-time recurrence, with more iterations enabling deeper reasoning. We further study how training strategies affect extrapolation, providing guidance on training recurrent-depth transformers, and identify a key limitation, overthinking, where excessive recurrence degrades predictions and limits generalization to very deep compositions.
 
@@ -68,5 +68,12 @@ To reproduce Figure 8 from the paper set the required parameters in model_specs 
 
 ## Citation
 ```
-TBD
+@article{kohli2026loop,
+  title={Loop, Think, \& Generalize: Implicit Reasoning in Recurrent-Depth Transformers},
+  author={Kohli, Harsh and Parthasarathy, Srinivasan and Sun, Huan and Yao, Yuekun},
+  journal={arXiv preprint arXiv:2604.07822},
+  year={2026},
+  doi={10.48550/arXiv.2604.07822},
+  url={https://arxiv.org/abs/2604.07822}
+}
 ```
